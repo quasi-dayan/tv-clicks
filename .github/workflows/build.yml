@@ -12,7 +12,6 @@ jobs:
         run: |
           mkdir -p src/com/custom/tvclicks res/xml res/values res/raw compiled_res gen obj
 
-          # Sounds umbenennen (Android-Ressourcen erlauben nur Kleinbuchstaben)
           cp Focus.ogg res/raw/focus.ogg
           cp BackTransition.ogg res/raw/back.ogg
           cp Home.ogg res/raw/home.ogg
@@ -21,10 +20,19 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.custom.tvclicks"
-              android:versionCode="2"
-              android:versionName="2.0">
+              android:versionCode="3"
+              android:versionName="3.0">
               <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="33" />
               <application android:label="TV Click Feedback">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                      </intent-filter>
+                  </activity>
                   <service
                       android:name="com.custom.tvclicks.ClickFeedbackService"
                       android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
@@ -55,6 +63,22 @@ jobs:
           <resources>
               <string name="app_name">TV Click Feedback</string>
           </resources>
+          EOF
+
+          cat << 'EOF' > src/com/custom/tvclicks/MainActivity.java
+          package com.custom.tvclicks;
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.widget.TextView;
+          public class MainActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  TextView tv = new TextView(this);
+                  tv.setText("TV Click Feedback läuft im Hintergrund.");
+                  setContentView(tv);
+              }
+          }
           EOF
 
           cat << 'EOF' > src/com/custom/tvclicks/ClickFeedbackService.java
@@ -133,7 +157,7 @@ jobs:
           $BUILD_TOOLS/aapt2 compile --dir res -o compiled_res.zip
           $BUILD_TOOLS/aapt2 link -o unsigned.apk -I "$PLATFORM/android.jar" --manifest AndroidManifest.xml --java gen --auto-add-overlay -0 ogg compiled_res.zip
 
-          javac --release 8 -cp "$PLATFORM/android.jar" -d obj gen/com/custom/tvclicks/R.java src/com/custom/tvclicks/ClickFeedbackService.java
+          javac --release 8 -cp "$PLATFORM/android.jar" -d obj gen/com/custom/tvclicks/R.java src/com/custom/tvclicks/MainActivity.java src/com/custom/tvclicks/ClickFeedbackService.java
           $BUILD_TOOLS/d8 --lib "$PLATFORM/android.jar" --output . obj/com/custom/tvclicks/*.class
           zip -uj unsigned.apk classes.dex
 
