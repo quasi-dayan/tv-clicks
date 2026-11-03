@@ -5,22 +5,28 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
       - name: Compile APK Directly
         run: |
-          mkdir -p src/com/custom/tvclicks res/xml res/values compiled_res gen obj
+          mkdir -p src/com/custom/tvclicks res/xml res/values res/raw compiled_res gen obj
+
+          # Sounds umbenennen (Android-Ressourcen erlauben nur Kleinbuchstaben)
+          cp Focus.ogg res/raw/focus.ogg
+          cp BackTransition.ogg res/raw/back.ogg
+          cp Home.ogg res/raw/home.ogg
 
           cat << 'EOF' > AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.custom.tvclicks"
-              android:versionCode="1"
-              android:versionName="1.0">
-              <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-              <application android:label="TV Click Feedback" android:requestLegacyExternalStorage="true">
+              android:versionCode="2"
+              android:versionName="2.0">
+              <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="33" />
+              <application android:label="TV Click Feedback">
                   <service
-                      android:name=".ClickFeedbackService"
+                      android:name="com.custom.tvclicks.ClickFeedbackService"
                       android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
                       android:exported="true">
                       <intent-filter>
@@ -37,10 +43,11 @@ jobs:
           cat << 'EOF' > res/xml/accessibility_service_config.xml
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes=""
-              android:accessibilityFeedbackType="feedbackGeneric"
-              android:accessibilityFlags="flagRequestFilterKeyEvents"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFeedbackType="feedbackAudible"
+              android:accessibilityFlags="flagRequestFilterKeyEvents|flagIncludeNotImportantViews"
               android:canRequestFilterKeyEvents="true"
+              android:notificationTimeout="0"
               android:description="@string/app_name" />
           EOF
 
@@ -58,7 +65,6 @@ jobs:
           import android.media.SoundPool;
           import android.view.KeyEvent;
           import android.view.accessibility.AccessibilityEvent;
-          import java.io.File;
 
           public class ClickFeedbackService extends AccessibilityService {
               private SoundPool soundPool;
@@ -68,29 +74,25 @@ jobs:
 
               @Override
               protected void onServiceConnected() {
+                  super.onServiceConnected();
                   AudioAttributes attrs = new AudioAttributes.Builder()
                           .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
                           .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                           .build();
 
                   soundPool = new SoundPool.Builder()
-                          .setMaxStreams(4)
+                          .setMaxStreams(6)
                           .setAudioAttributes(attrs)
                           .build();
 
-                  soundFocus = loadSound("Focus.ogg");
-                  soundBack = loadSound("BackTransition.ogg");
-                  soundHome = loadSound("Home.ogg");
-              }
-
-              private int loadSound(String name) {
-                  File f = new File("/sdcard/" + name);
-                  return f.exists() ? soundPool.load(f.getAbsolutePath(), 1) : 0;
+                  soundFocus = soundPool.load(this, R.raw.focus, 1);
+                  soundBack = soundPool.load(this, R.raw.back, 1);
+                  soundHome = soundPool.load(this, R.raw.home, 1);
               }
 
               @Override
               protected boolean onKeyEvent(KeyEvent event) {
-                  if (event.getAction() == KeyEvent.ACTION_DOWN && soundPool != null) {
+                  if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 && soundPool != null) {
                       int code = event.getKeyCode();
                       if (code == KeyEvent.KEYCODE_DPAD_UP ||
                           code == KeyEvent.KEYCODE_DPAD_DOWN ||
@@ -112,7 +114,11 @@ jobs:
               public void onAccessibilityEvent(AccessibilityEvent event) {}
 
               @Override
-              public void onInterrupt() {
+              public void onInterrupt() {}
+
+              @Override
+              public void onDestroy() {
+                  super.onDestroy();
                   if (soundPool != null) {
                       soundPool.release();
                       soundPool = null;
@@ -124,9 +130,8 @@ jobs:
           PLATFORM=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -n 1)
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
 
-          $BUILD_TOOLS/aapt2 compile res/xml/accessibility_service_config.xml -o compiled_res/
-          $BUILD_TOOLS/aapt2 compile res/values/strings.xml -o compiled_res/
-          $BUILD_TOOLS/aapt2 link -o unsigned.apk -I "$PLATFORM/android.jar" --manifest AndroidManifest.xml --java gen compiled_res/*.flat
+          $BUILD_TOOLS/aapt2 compile --dir res -o compiled_res.zip
+          $BUILD_TOOLS/aapt2 link -o unsigned.apk -I "$PLATFORM/android.jar" --manifest AndroidManifest.xml --java gen --auto-add-overlay -0 ogg compiled_res.zip
 
           javac --release 8 -cp "$PLATFORM/android.jar" -d obj gen/com/custom/tvclicks/R.java src/com/custom/tvclicks/ClickFeedbackService.java
           $BUILD_TOOLS/d8 --lib "$PLATFORM/android.jar" --output . obj/com/custom/tvclicks/*.class
