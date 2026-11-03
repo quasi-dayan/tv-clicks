@@ -1,0 +1,143 @@
+name: Build APK
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compile APK Directly
+        run: |
+          mkdir -p src/com/custom/tvclicks res/xml res/values compiled_res gen obj
+
+          cat << 'EOF' > AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.custom.tvclicks"
+              android:versionCode="1"
+              android:versionName="1.0">
+              <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+              <application android:label="TV Click Feedback" android:requestLegacyExternalStorage="true">
+                  <service
+                      android:name=".ClickFeedbackService"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_service_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > res/xml/accessibility_service_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes=""
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagRequestFilterKeyEvents"
+              android:canRequestFilterKeyEvents="true"
+              android:description="@string/app_name" />
+          EOF
+
+          cat << 'EOF' > res/values/strings.xml
+          <resources>
+              <string name="app_name">TV Click Feedback</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > src/com/custom/tvclicks/ClickFeedbackService.java
+          package com.custom.tvclicks;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.media.AudioAttributes;
+          import android.media.SoundPool;
+          import android.view.KeyEvent;
+          import android.view.accessibility.AccessibilityEvent;
+          import java.io.File;
+
+          public class ClickFeedbackService extends AccessibilityService {
+              private SoundPool soundPool;
+              private int soundFocus = 0;
+              private int soundBack = 0;
+              private int soundHome = 0;
+
+              @Override
+              protected void onServiceConnected() {
+                  AudioAttributes attrs = new AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                          .build();
+
+                  soundPool = new SoundPool.Builder()
+                          .setMaxStreams(4)
+                          .setAudioAttributes(attrs)
+                          .build();
+
+                  soundFocus = loadSound("Focus.ogg");
+                  soundBack = loadSound("BackTransition.ogg");
+                  soundHome = loadSound("Home.ogg");
+              }
+
+              private int loadSound(String name) {
+                  File f = new File("/sdcard/" + name);
+                  return f.exists() ? soundPool.load(f.getAbsolutePath(), 1) : 0;
+              }
+
+              @Override
+              protected boolean onKeyEvent(KeyEvent event) {
+                  if (event.getAction() == KeyEvent.ACTION_DOWN && soundPool != null) {
+                      int code = event.getKeyCode();
+                      if (code == KeyEvent.KEYCODE_DPAD_UP ||
+                          code == KeyEvent.KEYCODE_DPAD_DOWN ||
+                          code == KeyEvent.KEYCODE_DPAD_LEFT ||
+                          code == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                          code == KeyEvent.KEYCODE_DPAD_CENTER ||
+                          code == KeyEvent.KEYCODE_ENTER) {
+                          if (soundFocus != 0) soundPool.play(soundFocus, 1.0f, 1.0f, 1, 0, 1.0f);
+                      } else if (code == KeyEvent.KEYCODE_BACK) {
+                          if (soundBack != 0) soundPool.play(soundBack, 1.0f, 1.0f, 1, 0, 1.0f);
+                      } else if (code == KeyEvent.KEYCODE_HOME) {
+                          if (soundHome != 0) soundPool.play(soundHome, 1.0f, 1.0f, 1, 0, 1.0f);
+                      }
+                  }
+                  return false;
+              }
+
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent event) {}
+
+              @Override
+              public void onInterrupt() {
+                  if (soundPool != null) {
+                      soundPool.release();
+                      soundPool = null;
+                  }
+              }
+          }
+          EOF
+
+          PLATFORM=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -n 1)
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+
+          $BUILD_TOOLS/aapt2 compile res/xml/accessibility_service_config.xml -o compiled_res/
+          $BUILD_TOOLS/aapt2 compile res/values/strings.xml -o compiled_res/
+          $BUILD_TOOLS/aapt2 link -o unsigned.apk -I "$PLATFORM/android.jar" --manifest AndroidManifest.xml --java gen compiled_res/*.flat
+
+          javac --release 8 -cp "$PLATFORM/android.jar" -d obj gen/com/custom/tvclicks/R.java src/com/custom/tvclicks/ClickFeedbackService.java
+          $BUILD_TOOLS/d8 --lib "$PLATFORM/android.jar" --output . obj/com/custom/tvclicks/*.class
+          zip -uj unsigned.apk classes.dex
+
+          $BUILD_TOOLS/zipalign -p -f 4 unsigned.apk aligned.apk
+          keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          $BUILD_TOOLS/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out app-debug.apk aligned.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app-debug.apk
